@@ -1,0 +1,10 @@
+import { BaseAgent } from "./base-agent";
+import type {AgentContext,AgentResult,RenderResult,Script,VisualAsset,VoiceoverResult,MusicResult} from "./types";
+import fs from "node:fs/promises"; import path from "node:path"; import {spawn} from "node:child_process";
+interface I{script:Script;voiceover:VoiceoverResult;visualAssets:VisualAsset[];music:MusicResult}
+function run(cmd:string,args:string[]){return new Promise<void>((resolve,reject)=>{const p=spawn(cmd,args,{stdio:["ignore","pipe","pipe"]});let e="";p.stderr.on("data",d=>e+=d);p.on("close",c=>c===0?resolve():reject(new Error(`${cmd} exited ${c}: ${e.slice(-4000)}`)));});}
+export class RenderingAgent extends BaseAgent<I,RenderResult>{name="rendering";displayName="Editing & Rendering Agent";
+ async execute(input:I,context:AgentContext):Promise<AgentResult<RenderResult>>{if(!input.visualAssets.length)throw new Error("No visual assets");await fs.mkdir(context.workspaceDir,{recursive:true});const concat=path.join(context.workspaceDir,"concat.txt");const duration=input.voiceover.durationSeconds/Math.max(1,input.visualAssets.length);const lines=input.visualAssets.map(a=>`file '${a.localPath.replace(/'/g,"'\\''")}'\nduration ${duration.toFixed(3)}`).join("\n")+`\nfile '${input.visualAssets.at(-1)!.localPath.replace(/'/g,"'\\''")}'`;await fs.writeFile(concat,lines);const output=path.join(context.workspaceDir,"final_output.mp4");
+ await run("ffmpeg",["-y","-f","concat","-safe","0","-i",concat,"-i",input.voiceover.audioUrl,"-stream_loop","-1","-i",input.music.localPath,"-filter_complex","[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v];[2:a]volume=0.12,aloop=loop=-1:size=2e+09[bg];[1:a][bg]amix=inputs=2:duration=first:dropout_transition=2[a]","-map","[v]","-map","[a]","-t",String(input.voiceover.durationSeconds),"-r","30","-c:v","libx264","-preset","veryfast","-crf","20","-c:a","aac","-b:a","192k","-movflags","+faststart",output]);
+ const stat=await fs.stat(output);return{success:true,data:{videoPath:output,durationSeconds:input.voiceover.durationSeconds,fileSizeBytes:stat.size},costUsd:0,durationMs:0};}
+}
